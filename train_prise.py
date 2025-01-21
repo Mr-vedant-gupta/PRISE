@@ -1,6 +1,6 @@
 import warnings
 warnings.filterwarnings('ignore', category=DeprecationWarning)
-
+import wandb
 import os
 os.environ['MKL_SERVICE_FORCE_INTEL'] = '1'
 os.environ['MUJOCO_GL'] = 'egl'
@@ -28,7 +28,7 @@ import utils.misc as utils
 
 torch.backends.cudnn.benchmark = True
 
-def ddp_setup(rank, world_size, port):
+def ddp_setup(rank, world_size, port): # sets up distributed training when multiple gpus
     """
     Args:
         rank: Unique identifier of each process
@@ -79,7 +79,7 @@ class Workspace:
         self.pretraining_data_dirs = []
         ### In stage 1, 2, self.pretraining_data_dirs contain directories to demonstration dataset of all tasks from libero-90
         if self.cfg.stage < 3 or self.cfg.multitask:
-            for task_id in range(90): 
+            for task_id in range(80): # need to change this and also change cfg.max_traj_per_task to 45
                 benchmark_dict = benchmark.get_benchmark_dict()
                 task_suite = benchmark_dict['libero_90']()
                 task = task_suite.get_task(task_id)
@@ -125,7 +125,7 @@ class Workspace:
         print('Rank:{} World Size:{}'.format(self.rank, self.world_size))
 
         if self.cfg.stage == 1 or self.cfg.multitask:
-            self.replay_loader = make_replay_loader_dist(
+            self.replay_loader = make_replay_loader_dist( #this creates the dataloader, each item is a single action along with its n-step history and future
                 self.pretraining_data_dirs, self.cfg.max_traj_per_task, self.cfg.replay_buffer_size,
                 self.cfg.batch_size//self.world_size, self.cfg.replay_buffer_num_workers,
                 True, self.cfg.nstep, self.cfg.nstep_history, 
@@ -185,12 +185,12 @@ class Workspace:
             z_history_buffer.append(z) 
         
         ### Concatenate the historical observations and calculate observation embedding
-        z_history = torch.concatenate(list(z_history_buffer), dim=1)
+        z_history = torch.cat(list(z_history_buffer), dim=1)
         z_history = self.agent.compute_transformer_embedding(z_history)
         
         ### If the code_bfufer is empty, re-query the skill token policy
         if len(code_buffer) == 0:
-            meta_action = self.agent.PRISE.module.token_policy(z_history).max(-1)[1]
+            meta_action = self.agent.PRISE.module.token_policy(z_history).max(-1)[1] # greedy sample
             tok = self.idx_to_tok[int(meta_action.item())]
             code_buffer = self.tokenizer.decode([tok], verbose=False)
         
@@ -199,7 +199,7 @@ class Workspace:
         u = learned_code[code_selected, :]
         action = self.agent.PRISE.module.decode(z_history, u, decoder_type=self.cfg.decoder_type)
         return code_buffer, action.detach().cpu().numpy()[0]
-    
+
     
     ### Evaluate the trained PRISE agent's success rate
     def evaluate(self):
@@ -227,13 +227,14 @@ class Workspace:
             with open(self.eval_dir / '{}.pkl'.format(self.cfg.downstream_exp_name), 'wb') as f:
                 pickle.dump(self.performance, f)
         self.agent.train(True)
+        return success/self.cfg.num_eval_episodes
     
     
     ###### Stage 1: Pretrain action quantization
     def pretrain_models(self):
         metrics = None
         start_train_block_time = time.time()
-        while self.global_step < self.cfg.num_train_steps:
+        while self.global_step < self.cfg.num_train_steps: # I believe global_step is separate for each gpu
             if self.global_step%self.cfg.eval_freq == 0 and self.rank == 0:
                 print(f"\nPretraining for {self.global_step} steps of {self.cfg.batch_size}-sized batches has takes {time.time() - start_train_block_time}s.")
                 if metrics is not None:
@@ -312,7 +313,7 @@ class Workspace:
             self.agent.tokenizer = self.tokenizer
         
         ################## Tokenize the downstream data #################
-        print("========= Tokenizing the downstream data... ==========")
+        print("========= Tokenizing the downstream data... ==========") # TOKENS are sequences of CODES
         self.tok_to_idx = {}
         self.idx_to_tok = []
         replay_buffer = self.replay_loader.dataset
@@ -321,10 +322,11 @@ class Workspace:
                 task_embedding    = episode['task_embedding']
                 if self.eval_env is not None:
                     self.eval_env.task_embedding = task_embedding[None,:]
-                action    = episode['action'][1:]
+                action    = episode['action'][1:] # Now we are iterating on full trajectories (unlike the pretrain method)
                 action  = torch.torch.as_tensor(action, device=self.device)
                 obs_history = utils.compute_traj_latent_embedding(episode, device=self.device, nstep_history=self.cfg.nstep_history)
                 z = self.agent.encode_history(obs_history, aug=False)
+                z = self.agent.compute_transformer_embedding(z)
                 u = self.agent.PRISE.module.action_encoder(z, action.float())
                 _, _, _, _, codes = self.agent.PRISE.module.a_quantizer(u)
                 codes = list(codes.reshape(-1).detach().cpu().numpy())
@@ -338,7 +340,6 @@ class Workspace:
         self.agent.idx_to_tok = self.idx_to_tok
         self.agent.tok_to_idx = self.tok_to_idx
         print("========= Downstream data tokenized !!! ==========")
-        
         
         ################## Initialize the model (skill token policy) ###############
         print(f"========= Initiaizing the model... ==========")
@@ -362,12 +363,27 @@ class Workspace:
         print(f"========= Finetuning for {self.cfg.num_train_steps} steps... ==========")
         metrics = None
         start_train_block_time = time.time()
+        task_id = self.cfg.downstream_task_name
+        task = f"task {task_id}"
+        decoder_loss = f"{task} decoder_loss"
+        skill_token_policy_loss = f"{task} skill_token_policy_loss"
+        pesudo_variance = f"{task} pseudo_variance"
+        success = f"{task} success"
+        wandb.define_metric(task, hidden = True)
+        wandb.define_metric(decoder_loss, step_metric = task)
+        wandb.define_metric(pesudo_variance, step_metric = task)
+        wandb.define_metric(skill_token_policy_loss, step_metric=task)
+        wandb.define_metric(success, step_metric=task)
         while self.global_step < self.cfg.num_train_steps:
             if self.global_step%self.cfg.eval_freq == 0 and self.rank == 0:
                 print(f"\nTraining for {self.global_step} steps of {self.cfg.batch_size}-sized batches has takes {time.time() - start_train_block_time}s (including eval time).")
                 if metrics is not None:
                     # log stats
                     print('DECODER_LOSS:{}, SKILL_TOKEN_POLICY_LOSS:{}'.format(metrics['decoder_loss'], metrics['token_policy_loss']))
+                    wandb.log({decoder_loss : metrics['decoder_loss'],
+                               skill_token_policy_loss : metrics['token_policy_loss'],
+                               pesudo_variance : metrics['pseudo_variance'],
+                               task : self.global_step})
                     elapsed_time, total_time = self.timer.reset()
 
                 # save snapshot
@@ -375,11 +391,11 @@ class Workspace:
                     self.save_snapshot(self.cfg.stage, ckpt=self.global_step//self.cfg.eval_freq)
 
             metrics = self.agent.downstream_adapt(self.replay_iter, tok_to_code, tok_to_idx, self.idx_to_tok, finetune_decoder=self.cfg.finetune_decoder)
-
-            if self.global_step>5000 and self.global_step%self.cfg.eval_freq == 0:
+            if self.global_step%self.cfg.eval_freq == 0:
                 if self.cfg.eval:
                     start_eval_block_time = time.time()
-                    self.evaluate()
+                    success_rate = self.evaluate()
+                    wandb.log({success : success_rate, task : self.global_step})
                     print(f"Evaluation on {self.cfg.num_eval_episodes} episodes took {time.time() - start_eval_block_time}s.")
             
             self._global_step += 1
@@ -426,6 +442,9 @@ WORLD_SIZE = None
 
 @hydra.main(config_path='cfgs', config_name='prise_config')
 def main(cfg):
+    if cfg.stage == 3:
+        main_downstream(cfg)
+        return
     global RANK, WORLD_SIZE
     ddp_setup(RANK, WORLD_SIZE, cfg.port)
     from train_prise import Workspace as W
@@ -442,10 +461,45 @@ def main(cfg):
         workspace.pretrain_models()
     elif cfg.stage == 2:
         workspace.train_bpe()
-    elif cfg.stage == 3:
-        workspace.downstream_adapt()
     else:
         raise ValueError(f"Invalid stage: {cfg.stage}")
+    destroy_process_group()
+
+def main_downstream(cfg):
+    global RANK, WORLD_SIZE
+    wandb.init(
+        project="parameterized-skill-libero-single-skill", config=cfg, dir="../scratch/wandb",
+        name=cfg.downstream_exp_name, entity="parameterized-skills-2")
+    from train_prise import Workspace as W
+    root_dir = Path.cwd()
+    performances = []
+    ddp_setup(RANK, WORLD_SIZE, cfg.port)
+    for task_id in range(80, 90):
+        cfg.downstream_task_name = task_id
+        workspace = W(cfg, RANK, WORLD_SIZE)
+        root_dir = Path.cwd()
+        snapshot = root_dir / 'snapshot.pt'
+        if cfg.load_snapshot:
+            if snapshot.exists() and cfg.stage > 1:
+                print(f'resuming: {snapshot}')
+                workspace.load_snapshot()
+
+        workspace.downstream_adapt()
+        performances.append([i / 100 for i in workspace.performance])
+        time.sleep(1)
+    count = 0
+    sum = 0
+    averaged_success = []
+    for step in range(len(performances[0])):
+        for row in range(len(performances)):
+            sum += performances[row][step]
+            count += 1
+        averaged_success.append(sum / count)
+    step = cfg.eval_freq
+    wandb.define_metric("STEP", hidden=True)
+    wandb.define_metric("averaged_success", step_metric="STEP")
+    for i in range(len(averaged_success)):
+        wandb.log({"averaged_success":averaged_success[i], "STEP": step * i})
     destroy_process_group()
 
 def wrapper(rank, world_size, cfg):
