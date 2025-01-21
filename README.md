@@ -1,4 +1,4 @@
-# PRISE: Learning Temporal Action Abstractions as a Sequence Compression Problem
+# PRISE: LLM-Style Sequence Compression for Learning Temporal Action Abstractions in Control
 <p align="center" style="font-size: 50px">
    <a href="https://arxiv.org/pdf/2402.10450.pdf">[Paper]</a>&emsp;<a href="">[Project Website]</a>
 </p>
@@ -17,8 +17,8 @@ This thread contains implementation of **PRISE** on **LIBERO**. Check out the **
 
 **Step 1: Setup Environment**: 
 ```
-conda create -n libero python=3.8.13
-conda activate libero
+conda create -n prise python=3.8.13
+conda activate prise
 pip install -r requirements.txt
 pip install -e .
 ```
@@ -69,7 +69,7 @@ By default, we set voabulary size to be 200. The learned BPE tokenizer will be s
 ***Case I: Multitask Learning***:
 To train a multitask generalist policy on LIBERO-90:
 ```
-python train_prise.py exp_name=${EXP_NAME} replay_buffer_num_workers=4 stage=3 exp_bc_name=${DOWNSTREAM_EXP_NAME} multitask=true downstream_task_suite=libero_90 num_train_steps=30010 eval=false save_snapshot=true vocab_size=${VOCAB_SIZE} &
+python train_prise.py exp_name=${EXP_NAME} replay_buffer_num_workers=4 stage=3 downstream_exp_name=${DOWNSTREAM_EXP_NAME} multitask=true downstream_task_suite=libero_90 num_train_steps=30010 eval=false save_snapshot=true vocab_size=${VOCAB_SIZE} &
 ```
 To evaluate the trained multitask policy:
 ```
@@ -89,13 +89,13 @@ python train_prise.py exp_name=${EXP_NAME} replay_buffer_num_workers=4 batch_siz
 If you find our method or code relevant to your research, please consider citing the paper as follows:
 
 ```
-@misc{zheng2024prise,
-      title={PRISE: Learning Temporal Action Abstractions as a Sequence Compression Problem}, 
-      author={Ruijie Zheng and Ching-An Cheng and Hal Daumé III au2 and Furong Huang and Andrey Kolobov},
-      year={2024},
-      eprint={2402.10450},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG}
+@inproceedings{
+zheng2024prise,
+title={PRISE: LLM-Style Sequence Compression for Learning Temporal Action Abstractions in Control},
+author={Ruijie Zheng and Ching-An Cheng and Hal Daum{\'e} III and Furong Huang and Andrey Kolobov},
+booktitle={Forty-first International Conference on Machine Learning},
+year={2024},
+url={https://openreview.net/forum?id=p225Od0aYt}
 }
 ```
 
