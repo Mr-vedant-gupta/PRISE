@@ -97,7 +97,7 @@ class Workspace:
         ### Otherwise, append to the observation embedding buffer
         else:
             z_history_buffer.append(z) ### (1,1,4,feature_dim)
-        z_history = torch.concatenate(list(z_history_buffer), dim=1) 
+        z_history = torch.cat(list(z_history_buffer), dim=1) 
         z_history = self.agent.compute_transformer_embedding(z_history)
         
         ### Query the skill token policy again if the code buffer is empty

@@ -3,8 +3,8 @@ defaults:
   - override hydra/launcher: submitit_local
 
 ############## Directory Info
-libero_path: null
-data_storage_dir: null
+libero_path: /users/vgupta17/data/vgupta17/LIBERO
+data_storage_dir: /users/vgupta17/data/vgupta17/prise_libero
 task_data_dir_suffix: _framestack1
 results_dir: ./
 downstream_task_name: none
@@ -12,12 +12,12 @@ downstream_task_suite: libero_10
 log_root_dir: exp_local   ### Experimental results will be stored at ${log_root_dir}/${exp_name}
 
 ############## replay buffer
-replay_buffer_size: 100000000
+replay_buffer_size:  100000000 #10000 #100000000 #
 replay_buffer_num_workers: 1
 nstep: 3 ### number of future observations to load (to train action quantization & finetune action decoder)
 nstep_history: 10 ### number of historical steps for transformer embedding
-batch_size: 512
-max_traj_per_task: 50 ### number of demonstration trajectories per task
+batch_size: 120
+max_traj_per_task: 45 ### number of demonstration trajectories per task
 port: 12230
 
 ############## | Stage 1: pretrain action quantization | Stage 2: BPE to learn vocabulary | Stage 3: Downstream Adaptation
@@ -25,7 +25,7 @@ stage: 1
 num_train_steps: 200100
 
 ############## Stage 2 BPE parameters
-vocab_size: null
+vocab_size: 200
 min_frequency: 5
 max_token_length: 20
 
@@ -34,7 +34,7 @@ load_snapshot: true
 eval: true
 num_eval_episodes: 20
 eval_max_steps: 600 ### maximum timesteps per episode 
-eval_freq: 2000
+eval_freq: 500
 downstream_exp_name: default ### results will be saved at ${log_root_dir}/${exp_name}/stage3/${task_name}/${downstream_exp_name}
 finetune_decoder: true ### whether to finetune decoder for downstream tasks (set to be false only for multitask learning)
 multitask: false ### learning libero-90 policy

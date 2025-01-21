@@ -80,7 +80,9 @@ class ReplayBuffer(IterableDataset):
 
     def _preload(self):
         eps_fns = []
-        for replay_dir in self._replay_dir:
+        import os
+        print("Current Working Directory:", os.getcwd())
+        for replay_dir in self._replay_dir: # eps_fns contains each trajectory ("episode") separately
             eps_fns.extend(utils.choose(sorted(replay_dir.glob('*.npz'), reverse=True), self._max_traj_per_task))
         if len(eps_fns)==0:
             raise ValueError('No episodes found in {}'.format(self._replay_dir))
@@ -98,12 +100,12 @@ class ReplayBuffer(IterableDataset):
         task_embedding = episode['task_embedding'].astype(np.float32)
         
         # add +1 for the first dummy transition
-        idx = np.random.randint(0, episode_len(episode) - self._nstep + 1) + 1
-        action     = episode['action'][idx].astype(np.float32)
-        action_seq = [episode['action'][idx+i].astype(np.float32) for i in range(self._nstep)]
+        idx = np.random.randint(0, episode_len(episode) - self._nstep + 1) + 1 # the idx of a random action is selected
+        action     = episode['action'][idx].astype(np.float32) # this is the randomly selected action
+        action_seq = [episode['action'][idx+i].astype(np.float32) for i in range(self._nstep)] # this is the next nstep actions
 
         ############### Prepare future observations ###############
-        next_obs_agent, next_obs_wrist, next_state, next_task_embedding = [], [], [], []
+        next_obs_agent, next_obs_wrist, next_state, next_task_embedding = [], [], [], [] # same excercise but with these variables
         for i in range(self._nstep):
             next_obs_agent.append(episode['observation'][idx + i][None,:])
             next_obs_wrist.append(episode['observation_wrist'][idx + i][None,:])
@@ -120,7 +122,7 @@ class ReplayBuffer(IterableDataset):
         obs_agent_history, obs_wrist_history, state_history, task_embedding_history = [], [], [], []
         timestep = idx - 1
         ### obs_history: (o_{t-3}, o_{t-2}, o_{t-1}, o_{t}, 0, 0 ...)
-        while timestep >= 0 and len(obs_agent_history)<self._nstep_history:
+        while timestep >= 0 and len(obs_agent_history)<self._nstep_history: # now collect data upto nstep_history steps before idx.
             obs_agent_history = [episode['observation'][timestep][None,:]] + obs_agent_history
             obs_wrist_history = [episode['observation_wrist'][timestep][None,:]] + obs_wrist_history
             state_history     = [episode['state'][timestep][None, :]] + state_history 

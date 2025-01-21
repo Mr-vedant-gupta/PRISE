@@ -123,7 +123,7 @@ class PRISE(nn.Module):
         if decoder_type == 'deterministic':
             action = self.decoder(z + u)
         elif decoder_type == 'gmm':
-            action = self.decoder(z + u).sample()
+            action = self.decoder(z + u).sample() # actions are indeed sampled
         else:
             print('Decoder type not supported!')
             raise Exception
@@ -153,7 +153,7 @@ class PRISEAgent:
         self.n_code = n_code
         self.alpha  = alpha
         self.decoder_type = decoder_type
-        self.positional_embedding = SinusoidalPositionEncoding(feature_dim)
+        self.positional_embedding = SinusoidalPositionEncoding(feature_dim) # is appears as though the seld.encoders, etc. are seaprate for each gpu
         self.encoders = torch.nn.ModuleList([ResnetEncoder(input_shape=obs_shape, output_size=feature_dim).to(device),
                                              ResnetEncoder(input_shape=obs_shape, output_size=feature_dim).to(device),
                                              nn.Sequential(
@@ -197,7 +197,7 @@ class PRISEAgent:
         z_wrist = self.encoders[1](obs_wrist.float(), langs=task_embedding).unsqueeze(1)
         state   = self.encoders[2](state.float()).unsqueeze(1)
         task_embedding = self.encoders[3](task_embedding).unsqueeze(1)
-        z = torch.concatenate([z_agent, z_wrist, state, task_embedding], dim=1)
+        z = torch.cat([z_agent, z_wrist, state, task_embedding], dim=1)
         return z.unsqueeze(1)
     
     ### Shape of the input tensor
@@ -232,7 +232,7 @@ class PRISEAgent:
         z_state_history  = z_state_history.reshape(batch_size,  time_step, 1, -1)
         z_task_embedding = z_task_embedding.reshape(batch_size, time_step, 1, -1)
         
-        z_history = torch.concatenate([z_agent_history, z_wrist_history, z_state_history, z_task_embedding], dim=2)
+        z_history = torch.cat([z_agent_history, z_wrist_history, z_state_history, z_task_embedding], dim=2)
         return z_history
     
     ### Apply the transformer decoder block to get the embedding from the stack of historical latent state embeddings
@@ -267,15 +267,16 @@ class PRISEAgent:
         nstep = next_obs_agent.shape[1]
         
         ### Data Augmentation (make sure that the augmentation is consistent across timesteps)
-        obs_agent_seq = torch.concatenate([obs_agent_history, next_obs_agent], dim=1)
-        obs_wrist_seq = torch.concatenate([obs_wrist_history, next_obs_wrist], dim=1)
+        obs_agent_seq = torch.cat([obs_agent_history, next_obs_agent], dim=1)
+        obs_wrist_seq = torch.cat([obs_wrist_history, next_obs_wrist], dim=1)
         obs_agent_seq, obs_wrist_seq = self.aug((obs_agent_seq, obs_wrist_seq))
         obs_agent_history = obs_agent_seq[:, :obs_agent_history.shape[1]]
         next_obs_agent    = obs_agent_seq[:, obs_agent_history.shape[1]:]
         obs_wrist_history = obs_wrist_seq[:, :obs_wrist_history.shape[1]]
         next_wrist_agent    = obs_wrist_seq[:, obs_wrist_history.shape[1]:]
-        
+        # Pass the history images and robot state through the resnet encoder (spatial encoding)
         z_history = self.encode_history((obs_agent_history, obs_wrist_history, state_history, task_embedding_history), aug=False)
+        # pass through transformer encoder (temporal encoding)
         o_embed = self.compute_transformer_embedding(z_history)
         
         z = o_embed
@@ -301,7 +302,7 @@ class PRISEAgent:
             next_z = self.encode_obs(next_obs, aug=False) ### (batch_size, 1, 4, feature_dim)
             
             ### update latent history with the latest timestep
-            z_history = torch.concatenate([z_history[:, 1:], next_z], dim=1)
+            z_history = torch.cat([z_history[:, 1:], next_z], dim=1)
             o_embed   = self.compute_transformer_embedding(z_history)
             y_next    = self.PRISE.module.proj_s(o_embed).detach()
             y_pred = self.PRISE.module.predictor(self.PRISE.module.proj_s(z)) 
@@ -321,6 +322,14 @@ class PRISEAgent:
         batch = next(replay_iter)
         obs_history, action, action_seq, next_obs = batch
         metrics.update(self.update_prise(obs_history, action, action_seq, next_obs))
+
+        # Some basic profiling
+        # gpu_memory_allocated = torch.cuda.memory_allocated(0)  # Memory currently allocated (bytes)
+        # gpu_memory_reserved = torch.cuda.memory_reserved(0)  # Total reserved memory (bytes)
+        # gpu_memory_total = torch.cuda.get_device_properties(0).total_memory  # Total GPU memory (bytes)
+        # print("Memory allocated, reserved, total", gpu_memory_allocated, gpu_memory_reserved, gpu_memory_total)
+        # print("memory_used_ratio", gpu_memory_reserved / gpu_memory_total)
+
         return metrics
     
     def downstream_adapt(self, replay_iter, tok_to_code, 
@@ -351,11 +360,11 @@ class PRISEAgent:
             nstep_history = obs_agent_history.shape[1]
             
             ### Data Augmentation (make sure that the augmentation is consistent across timesteps)
-            obs_agent_seq = torch.concatenate([obs_agent_history, next_obs_agent], dim=1)
-            obs_wrist_seq = torch.concatenate([obs_wrist_history, next_obs_wrist], dim=1)
+            obs_agent_seq = torch.cat([obs_agent_history, next_obs_agent], dim=1)
+            obs_wrist_seq = torch.cat([obs_wrist_history, next_obs_wrist], dim=1)
             obs_agent_seq, obs_wrist_seq = self.aug((obs_agent_seq, obs_wrist_seq))
-            state_seq = torch.concatenate([state_history, next_state], dim=1)
-            task_embedding_seq = torch.concatenate([task_embedding_history, next_task_embedding], dim=1)
+            state_seq = torch.cat([state_history, next_state], dim=1)
+            task_embedding_seq = torch.cat([task_embedding_history, next_task_embedding], dim=1)
             
             z_seq = []
             for i in range(nstep):
@@ -367,7 +376,8 @@ class PRISEAgent:
                 z_seq.append(self.compute_transformer_embedding(z)) ###(batch_size, feature_dim)
         
         meta_action = self.PRISE.module.token_policy(z_seq[0])
-        token_policy_loss = F.cross_entropy(meta_action, index)
+        token_policy_loss = F.cross_entropy(meta_action, index) # predict the correct token for the current timestep
+
         
         ###################### Finetune Action Decoder ###########################
         if finetune_decoder:
@@ -375,30 +385,36 @@ class PRISEAgent:
             decoder_loss_lst = []
             vocab_size = len(idx_to_tok)
             rollout_length = [min(nstep, len(tok_to_code(torch.tensor(idx_to_tok[idx])))) for idx in range(vocab_size)]
-            z = torch.concatenate([z.unsqueeze(1) for z in z_seq], dim=1)
+            z = torch.cat([z.unsqueeze(1) for z in z_seq], dim=1)
             z = z.unsqueeze(1).repeat(1, vocab_size, 1, 1) ### (batch_size, nstep, vocab_size, feature_dim)
-            action = torch.concatenate([action.unsqueeze(1) for action in action_seq], dim=1)
+            action = torch.cat([action.unsqueeze(1) for action in action_seq], dim=1)
             action = action.unsqueeze(1).repeat(1, vocab_size, 1, 1) ### (batch_size, nstep, vocab_size, feature_dim)
 
             with torch.no_grad():
                 u_quantized_lst = []
-                for idx in range(vocab_size):
+                for idx in range(vocab_size): # for every token
                     u_quantized_seq = []
                     for t in range(nstep):
                         learned_code   = self.PRISE.module.a_quantizer.embedding.weight
                         if t<rollout_length[idx]:
-                            u_quantized    = learned_code[tok_to_code(torch.tensor(idx_to_tok[idx]))[t], :]
+                            u_quantized    = learned_code[tok_to_code(torch.tensor(idx_to_tok[idx]))[t], :] # get an embedding for the current code given the token and timestep.
                         else:
                             u_quantized    = learned_code[tok_to_code(torch.tensor(idx_to_tok[idx]))[0], :]
                         u_quantized    = u_quantized.repeat(batch_size, 1)
                         u_quantized_seq.append(u_quantized.unsqueeze(1))
-                    u_quantized = torch.concatenate(u_quantized_seq,dim=1) ### (batch_size, nstep, feature_dim)
+                    u_quantized = torch.cat(u_quantized_seq,dim=1) ### (batch_size, nstep, feature_dim)
                     u_quantized_lst.append(u_quantized.unsqueeze(1))
-                u_quantized_lst = torch.concatenate(u_quantized_lst,dim=1) ### (batch_size, vocab_size, nstep, feature_dim)
-
+                u_quantized_lst = torch.cat(u_quantized_lst,dim=1) ### (batch_size, vocab_size, nstep, feature_dim) # an embedding for the first nstep action codes in each token
             ##### Decode the codes into action sequences and calculate L1 loss ### (batch_size*nstep*feature_dim, -1)
-            decode_action = self.PRISE.module.decoder((z + u_quantized_lst).reshape(-1, z.shape[-1]))
+            decode_action = self.PRISE.module.decoder((z + u_quantized_lst).reshape(-1, z.shape[-1])) # predict action for each batch and token for the next nstep steps
             action = action.reshape(-1, action_dim)
+            variances = decode_action.component_distribution.base_dist.scale.reshape(batch_size, vocab_size, nstep, 5, 7)
+            greedy_tokens = meta_action.argmax(dim = -1)
+            variances = variances[torch.arange(batch_size), greedy_tokens][..., :-1].sum(dim = -1)
+            selected_gaussians = decode_action.mixture_distribution.probs.reshape(batch_size, vocab_size, nstep, 5)
+            selected_gaussians = selected_gaussians[torch.arange(batch_size), greedy_tokens]
+            weighted_variances = variances * selected_gaussians
+            average_variance = weighted_variances.sum() / (batch_size*nstep*6)
             if self.decoder_type == 'deterministic':
                 decoder_loss = torch.sum(torch.abs(decode_action-action), dim=-1, keepdim=True)
             elif self.decoder_type == 'gmm':
@@ -426,5 +442,6 @@ class PRISEAgent:
         
         metrics = dict()
         metrics['token_policy_loss'] = token_policy_loss.item()
-        metrics['decoder_loss'] = decoder_loss.item()
+        metrics['decoder_loss'] = decoder_loss.item() / self.PRISE.module.decoder.loss_coef
+        metrics['pseudo_variance'] = average_variance # not truly the correct varaince of a gmm, rather the avg variance of the gaussians
         return metrics

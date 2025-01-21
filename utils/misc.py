@@ -348,10 +348,10 @@ def compute_traj_latent_embedding(episode, device, nstep_history):
                 state_buffer.append(state[t].float().unsqueeze(0)) ### (1,state_dim)
                 task_embedding_buffer.append(task_embedding.float().unsqueeze(0)) ### (1,feature_dim)
 
-            obs_agent_history = torch.concatenate(list(obs_agent_buffer), dim=0) ### (10,3,128,128)
-            obs_wrist_history = torch.concatenate(list(obs_wrist_buffer), dim=0) ### (10,3,128,128)
-            state_history = torch.concatenate(list(state_buffer), dim=0) ### (10,state_dim)
-            task_embedding_history = torch.concatenate(list(task_embedding_buffer), dim=0) ###(10,feature_dim)(10,lang_emb_dim)
+            obs_agent_history = torch.cat(list(obs_agent_buffer), dim=0) ### (10,3,128,128)
+            obs_wrist_history = torch.cat(list(obs_wrist_buffer), dim=0) ### (10,3,128,128)
+            state_history = torch.cat(list(state_buffer), dim=0) ### (10,state_dim)
+            task_embedding_history = torch.cat(list(task_embedding_buffer), dim=0) ###(10,feature_dim)(10,lang_emb_dim)
 
             obs_agent_episode.append(obs_agent_history.unsqueeze(0))
             obs_wrist_episode.append(obs_wrist_history.unsqueeze(0))
@@ -359,10 +359,10 @@ def compute_traj_latent_embedding(episode, device, nstep_history):
             task_embedding_episode.append(task_embedding_history.unsqueeze(0))
 
 
-        obs_agent_episode = torch.concatenate(obs_agent_episode, dim=0)
-        obs_wrist_episode = torch.concatenate(obs_wrist_episode, dim=0)
-        state_episode = torch.concatenate(state_episode, dim=0)
-        task_embedding_episode = torch.concatenate(task_embedding_episode, dim=0)
+        obs_agent_episode = torch.cat(obs_agent_episode, dim=0)
+        obs_wrist_episode = torch.cat(obs_wrist_episode, dim=0)
+        state_episode = torch.cat(state_episode, dim=0)
+        task_embedding_episode = torch.cat(task_embedding_episode, dim=0)
         obs_history = (obs_agent_episode,
                        obs_wrist_episode,
                        state_episode,
