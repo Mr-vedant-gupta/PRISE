@@ -16,13 +16,13 @@ replay_buffer_size:  100000000 #10000 #100000000 #
 replay_buffer_num_workers: 1
 nstep: 3 ### number of future observations to load (to train action quantization & finetune action decoder)
 nstep_history: 10 ### number of historical steps for transformer embedding
-batch_size: 120
+batch_size: 35
 max_traj_per_task: 45 ### number of demonstration trajectories per task
 port: 12230
 
 ############## | Stage 1: pretrain action quantization | Stage 2: BPE to learn vocabulary | Stage 3: Downstream Adaptation
 stage: 1 
-num_train_steps: 200100
+num_train_steps: 25_000
 
 ############## Stage 2 BPE parameters
 vocab_size: 200
@@ -34,7 +34,7 @@ load_snapshot: true
 eval: true
 num_eval_episodes: 20
 eval_max_steps: 600 ### maximum timesteps per episode 
-eval_freq: 500
+eval_freq: 1200
 downstream_exp_name: default ### results will be saved at ${log_root_dir}/${exp_name}/stage3/${task_name}/${downstream_exp_name}
 finetune_decoder: true ### whether to finetune decoder for downstream tasks (set to be false only for multitask learning)
 multitask: false ### learning libero-90 policy

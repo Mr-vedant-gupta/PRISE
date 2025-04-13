@@ -248,7 +248,7 @@ class Workspace:
 
                 # save snapshot
                 if self.cfg.save_snapshot and self.rank == 0:
-                    self.save_snapshot(self.cfg.stage)
+                    self.save_snapshot(self.cfg.stage, ckpt = self.global_step)
 
             self._global_step += 1
             metrics = self.agent.update(self.replay_iter, self.global_step)
