@@ -474,8 +474,12 @@ def main_downstream(cfg):
     root_dir = Path.cwd()
     performances = []
     ddp_setup(RANK, WORLD_SIZE, cfg.port)
+    # calculated for fair comparison with paramskills based on average per task trajectory length
+    batch_sizes = [25, 30, 25, 24, 21, 18, 28, 30, 18, 21]
+    idx = 0
     for task_id in range(80, 90):
         cfg.downstream_task_name = task_id
+        cfg.batch_size = batch_sizes[idx]
         workspace = W(cfg, RANK, WORLD_SIZE)
         root_dir = Path.cwd()
         snapshot = root_dir / 'snapshot.pt'
@@ -487,10 +491,12 @@ def main_downstream(cfg):
         workspace.downstream_adapt()
         performances.append([i / 100 for i in workspace.performance])
         time.sleep(1)
-    count = 0
-    sum = 0
+        idx += 1
+
     averaged_success = []
     for step in range(len(performances[0])):
+        count = 0
+        sum = 0
         for row in range(len(performances)):
             sum += performances[row][step]
             count += 1

@@ -8,7 +8,7 @@ data_storage_dir: /users/vgupta17/data/vgupta17/prise_libero
 task_data_dir_suffix: _framestack1
 results_dir: ./
 downstream_task_name: none
-downstream_task_suite: libero_10 
+downstream_task_suite: libero_90
 log_root_dir: exp_local   ### Experimental results will be stored at ${log_root_dir}/${exp_name}
 
 ############## replay buffer
