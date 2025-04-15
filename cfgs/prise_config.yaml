@@ -10,6 +10,7 @@ results_dir: ./
 downstream_task_name: none
 downstream_task_suite: libero_90
 log_root_dir: exp_local   ### Experimental results will be stored at ${log_root_dir}/${exp_name}
+checkpoint_name: none
 
 ############## replay buffer
 replay_buffer_size:  100000000 #10000 #100000000 #

@@ -425,7 +425,7 @@ class Workspace:
             torch.save(payload, f)
 
     def load_snapshot(self):
-        snapshot = self.results_dir / 'snapshot.pt'
+        snapshot = self.results_dir / f'{self.cfg.checkpoint_name}.pt'
         with snapshot.open('rb') as f:
             print(self.device)
             payload = torch.load(f, map_location=f'cuda:{self.device}')
