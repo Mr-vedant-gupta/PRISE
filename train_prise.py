@@ -391,7 +391,7 @@ class Workspace:
                     self.save_snapshot(self.cfg.stage, ckpt=self.global_step//self.cfg.eval_freq)
 
             metrics = self.agent.downstream_adapt(self.replay_iter, tok_to_code, tok_to_idx, self.idx_to_tok, finetune_decoder=self.cfg.finetune_decoder)
-            if self.global_step%self.cfg.eval_freq == 0:
+            if self.global_step%self.cfg.eval_freq == 0 and self.global_step != 0:
                 if self.cfg.eval:
                     start_eval_block_time = time.time()
                     success_rate = self.evaluate()
@@ -451,11 +451,15 @@ def main(cfg):
     root_dir = Path.cwd()
     workspace = W(cfg, RANK, WORLD_SIZE)
     root_dir = Path.cwd()
-    snapshot = root_dir / 'snapshot.pt'
+    snapshot = root_dir / f'{cfg.checkpoint_name}.pt'
     if cfg.load_snapshot:
         if snapshot.exists() and cfg.stage > 1:
             print(f'resuming: {snapshot}')
             workspace.load_snapshot()
+        elif cfg.stage == 2:
+            raise Exception("No snapshot")
+    elif cfg.stage == 2:
+        raise Exception("No snapshot")
 
     if cfg.stage == 1:
         workspace.pretrain_models()
@@ -482,11 +486,15 @@ def main_downstream(cfg):
         cfg.batch_size = batch_sizes[idx]
         workspace = W(cfg, RANK, WORLD_SIZE)
         root_dir = Path.cwd()
-        snapshot = root_dir / 'snapshot.pt'
+        snapshot = root_dir / f'{cfg.checkpoint_name}.pt'
         if cfg.load_snapshot:
             if snapshot.exists() and cfg.stage > 1:
                 print(f'resuming: {snapshot}')
                 workspace.load_snapshot()
+            else:
+                raise Exception('no snapshot found')
+        else:
+            raise Exception('no snapshot found')
 
         workspace.downstream_adapt()
         performances.append([i / 100 for i in workspace.performance])
