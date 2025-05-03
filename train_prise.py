@@ -480,6 +480,7 @@ def main_downstream(cfg):
     ddp_setup(RANK, WORLD_SIZE, cfg.port)
     # calculated for fair comparison with paramskills based on average per task trajectory length
     batch_sizes = [25, 30, 25, 24, 21, 18, 28, 30, 18, 21]
+    # batch sizes for libero 10: [45, 40, 41, 38, 40, 29, 39, 41, 64, 47]
     idx = 0
     for task_id in range(80, 90):
         cfg.downstream_task_name = task_id
