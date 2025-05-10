@@ -479,10 +479,10 @@ def main_downstream(cfg):
     performances = []
     ddp_setup(RANK, WORLD_SIZE, cfg.port)
     # calculated for fair comparison with paramskills based on average per task trajectory length
-    batch_sizes = [25, 30, 25, 24, 21, 18, 28, 30, 18, 21]
+    batch_sizes = [45, 40, 41, 38, 40, 29, 39, 41, 64, 47] #[25, 30, 25, 24, 21, 18, 28, 30, 18, 21]
     # batch sizes for libero 10: [45, 40, 41, 38, 40, 29, 39, 41, 64, 47]
     idx = 0
-    for task_id in range(80, 90):
+    for task_id in range(0, 10):
         cfg.downstream_task_name = task_id
         cfg.batch_size = batch_sizes[idx]
         workspace = W(cfg, RANK, WORLD_SIZE)
