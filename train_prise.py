@@ -484,8 +484,8 @@ def main_downstream(cfg):
     idx = 0
     for task_id in range(80, 90):
         cfg.downstream_task_name = task_id
-        if cfg.batch_size != 0:
-            raise Exception("this should not happen")
+        # if cfg.batch_size != 0:
+        #     raise Exception("this should not happen")
         cfg.batch_size = batch_sizes[idx]
         workspace = W(cfg, RANK, WORLD_SIZE)
         root_dir = Path.cwd()
