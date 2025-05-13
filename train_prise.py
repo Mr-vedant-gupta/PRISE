@@ -25,6 +25,8 @@ import copy
 import pickle
 import io
 from tokenizer_api import Tokenizer
+import wandb
+from mw_tasks import TASK_IDX_TO_TASK_NAME
 
 torch.backends.cudnn.benchmark = True
 
@@ -77,19 +79,21 @@ class Workspace:
         self.results_dir = Path(self.cfg.results_dir)
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.pretraining_data_dirs = []
+        self.rollout_task_id = 0
         
          ### In stage 1, 2, self.pretraining_data_dirs contain directories to demonstration dataset of all 45 tasks
         if self.cfg.stage < 3:
-            for task_name in utils.mw45_task_names():      
+            for task_name in utils.mw10_task_names():
                 offline_data_dir = construct_task_data_path(self.cfg.data_storage_dir, task_name, self.cfg.task_data_dir_suffix)
                 self.pretraining_data_dirs.append(offline_data_dir)
             self.eval_env = None
         ### In stage 3, set up the eval environment
         else:
-            task_name = self.cfg.downstream_task_name
-            self.eval_env = mw.make(task_name, frame_stack=3,
-                                    action_repeat=1, seed=self.cfg.seed, 
-                                    train=False, device_id=-1)
+            self.task_name = self.cfg.downstream_task_name
+            self.eval_env = None
+            # self.eval_env = mw.make(task_name, frame_stack=3,
+            #                         action_repeat=1, seed=self.cfg.seed,
+            #                         train=False, device_id=-1)
         assert self.cfg.stage in [1, 2, 3], "Stage must be 1, 2, or 3."
 
         if self.cfg.stage < 3:
@@ -124,7 +128,7 @@ class Workspace:
             downstream_data_path = construct_task_data_path(self.cfg.data_storage_dir, self.cfg.downstream_task_name, self.cfg.task_data_dir_suffix)
             print(f"Loading target task data from {downstream_data_path}")
             self.replay_loader = make_replay_loader_dist(
-                [downstream_data_path], self.cfg.max_traj_per_task, self.cfg.replay_buffer_size,
+                [downstream_data_path], self.cfg.max_traj_per_downstream_task, self.cfg.replay_buffer_size,
                 self.cfg.batch_size//self.world_size, self.cfg.replay_buffer_num_workers,
                 self.cfg.nstep, self.cfg.nstep_history, self.rank, self.world_size)
 
@@ -149,8 +153,8 @@ class Workspace:
     
     ### Query the PRISE agent's action given current observatio
     def act(self, env, obs, code_buffer, z_history_buffer):
-        img = obs.observation
-        state     = obs.state 
+        img = obs["imgs"]
+        state     = obs["robot_states"]
         img = torch.torch.as_tensor(img, device=self.device).unsqueeze(0)
         state     = torch.torch.as_tensor(state, device=self.device).unsqueeze(0)
         z = self.agent.encode_obs((img, state), aug=False)
@@ -182,21 +186,26 @@ class Workspace:
         self.agent.train(False)
         eval_until_episode = utils.Until(self.cfg.num_eval_episodes)
 
-        eval_env, task_name = self.eval_env, self.cfg.downstream_task_name
+        task_name = self.cfg.downstream_task_name
         counter, episode, success = 0, 0, 0
         while eval_until_episode(episode):
-            time_step = eval_env.reset()
+            eval_env = mw.make(task_name, self.rollout_task_id % 50, 3)
+            obs, _, terminate, info = eval_env.reset()
             step, code_buffer = 0, []
             z_history_buffer = deque(maxlen=self.cfg.nstep_history)
             while step < self.cfg.eval_max_steps:
-                if time_step['success']:
+                if info['success']:
                     success += 1
                     break
+                elif terminate:
+                    break
                 with torch.no_grad():
-                    code_buffer, action = self.act(eval_env, time_step, code_buffer, z_history_buffer)
-                time_step = eval_env.step(action)
+                    code_buffer, action = self.act(eval_env, obs, code_buffer, z_history_buffer)
+                obs, _, terminate, info = eval_env.step(action)
                 step += 1
+            eval_env.terminate()
             episode += 1
+            self.rollout_task_id += 1
 
         print('Success Rate:{}%'.format(success/self.cfg.num_eval_episodes*100))
         self.performance.append(success/self.cfg.num_eval_episodes*100)
@@ -204,6 +213,7 @@ class Workspace:
             with open(self.eval_dir / '{}.pkl'.format(self.cfg.downstream_exp_name), 'wb') as f:
                 pickle.dump(self.performance, f)
         self.agent.train(True)
+        return success/self.cfg.num_eval_episodes
         
     ###### Stage I: Pretrain action quantization    
     def pretrain_models(self):
@@ -223,7 +233,7 @@ class Workspace:
 
                 # Save snapshot
                 if self.cfg.save_snapshot and self.rank == 0:
-                    self.save_snapshot(self.cfg.stage)
+                    self.save_snapshot(self.cfg.stage, ckpt = self.global_step)
 
             self._global_step += 1
             metrics = self.agent.update(self.replay_iter, self.global_step)
@@ -248,7 +258,7 @@ class Workspace:
                 counter += 1
                 episode = np.load(f)
                 ### Calculate the discretize action codes at each timestep
-                action    = episode['action'][1:]
+                action    = episode['actions'][1:]
                 action  = torch.torch.as_tensor(action, device=self.device)
                 obs_history = utils.compute_traj_latent_embedding(episode, device=self.device, nstep_history=self.cfg.nstep_history)
                 z = self.agent.encode_history(obs_history, aug=False)
@@ -272,7 +282,7 @@ class Workspace:
         ### Save pretrained tokenizer
         vocab_dir = self.results_dir / 'vocab'
         vocab_dir.mkdir(parents=True, exist_ok=True)
-        with open(vocab_dir / 'vocab_mt45_code{}_vocab{}_minfreq{}_maxtoken{}.pkl'.format(self.cfg.n_code, self.cfg.vocab_size, self.cfg.min_frequency, self.cfg.max_token_length), 'wb') as f:
+        with open(vocab_dir / 'vocab_mt10_code{}_vocab{}_minfreq{}_maxtoken{}.pkl'.format(self.cfg.n_code, self.cfg.vocab_size, self.cfg.min_frequency, self.cfg.max_token_length), 'wb') as f:
             pickle.dump([tokenizer, corpus], f)
     
     ### Stage III: Adapt to unseen tasks with few expert demonstration trajectories
@@ -285,7 +295,7 @@ class Workspace:
         
         ################## Load the BPE-Learned vocabulary #################
         vocab_dir = self.results_dir / 'vocab'
-        with open(vocab_dir / 'vocab_mt45_code{}_vocab{}_minfreq{}_maxtoken{}.pkl'.format(self.cfg.n_code, self.cfg.vocab_size, self.cfg.min_frequency, self.cfg.max_token_length), 'rb') as f:
+        with open(vocab_dir / 'vocab_mt10_code{}_vocab{}_minfreq{}_maxtoken{}.pkl'.format(self.cfg.n_code, self.cfg.vocab_size, self.cfg.min_frequency, self.cfg.max_token_length), 'rb') as f:
             loaded_data = pickle.load(f)
             self.tokenizer, corpus = loaded_data
         
@@ -296,9 +306,9 @@ class Workspace:
         for episode in replay_buffer._episodes.values():
             with torch.no_grad():
                 ### Calculate the discretize action codes at each timestep
-                action    = episode['action'][1:]
+                action    = episode['actions'][1:]
                 action  = torch.torch.as_tensor(action, device=self.device)
-                obs_history = utils.compute_traj_latent_embedding(episode, device=self.device, nstep_history=self.cfg.nstep_history)
+                obs_history = utils.compute_traj_latent_embedding_downstream(episode, device=self.device, nstep_history=self.cfg.nstep_history)
                 z = self.agent.encode_history(obs_history, aug=False)
                 z = self.agent.compute_transformer_embedding(z)
                 u = self.agent.PRISE.module.action_encoder(z, action.float())
@@ -338,13 +348,28 @@ class Workspace:
         metrics = None
         print(f"========= Finetuning for {self.cfg.num_train_steps} steps... ==========")
         start_train_block_time = time.time()
+        task_id = self.cfg.downstream_task_name
+        task = f"task {task_id}"
+        decoder_loss = f"{task} decoder_loss"
+        skill_token_policy_loss = f"{task} skill_token_policy_loss"
+        success = f"{task} success"
+        wandb.define_metric(task, hidden=True)
+        wandb.define_metric(decoder_loss, step_metric=task)
+        wandb.define_metric(skill_token_policy_loss, step_metric=task)
+        wandb.define_metric(success, step_metric=task)
+
+
         while self.global_step < self.cfg.num_train_steps:
+            self.global_step += 1
             if self.global_step%self.cfg.eval_freq == 0 and self.rank == 0:
                 print(f"\nTraining for {self.global_step} steps of {self.cfg.batch_size}-sized batches has takes {time.time() - start_train_block_time}s (including eval time).")
                 if metrics is not None:
                     # log stats
                     print('DECODER_LOSS:{}, TOKEN_POLICY_LOSS:{}'.format(metrics['decoder_loss'], metrics['token_policy_loss']))
                     elapsed_time, total_time = self.timer.reset()
+                    wandb.log({decoder_loss: metrics['decoder_loss'],
+                               skill_token_policy_loss: metrics['token_policy_loss'],
+                               task: self.global_step})
                 
                 if self.cfg.save_snapshot and self.rank == 0:
                     self.save_snapshot(self.cfg.stage, ckpt=self.global_step//self.cfg.eval_freq)
@@ -352,10 +377,11 @@ class Workspace:
             metrics = self.agent.downstream_adapt(self.replay_iter, tok_to_code, tok_to_idx, self.idx_to_tok, finetune_decoder=self.cfg.finetune_decoder)
             
             ### Evaluate the model
-            if self.global_step%self.cfg.eval_freq == 0:
+            if self.global_step%self.cfg.eval_freq == 0 and self.global_step != 0:
                 start_eval_block_time = time.time()
-                self.evaluate()
+                success_rate = self.evaluate()
                 print(f"Evaluation on {self.cfg.num_eval_episodes} episodes took {time.time() - start_eval_block_time}s.")
+                wandb.log({success: success_rate, task: self.global_step})
             
             self._global_step += 1
             
@@ -382,7 +408,7 @@ class Workspace:
             torch.save(payload, f)
 
     def load_snapshot(self):
-        snapshot = self.results_dir / 'snapshot.pt'
+        snapshot = self.results_dir / f'{self.cfg.checkpoint_name}.pt'
         with snapshot.open('rb') as f:
             print(self.device)
             payload = torch.load(f, map_location=f'cuda:{self.device}')
@@ -392,32 +418,86 @@ class Workspace:
         self.agent.device = self.device
         self.agent.PRISE.device = self.device
         self.agent.PRISE.to(self.device)
-        print('Resuming Snapshopt')
+        print('learninghot')
 
 RANK = None
 WORLD_SIZE = None
 
 @hydra.main(config_path='cfgs', config_name='prise_config')
 def main(cfg):
+    if cfg.stage == 3:
+        main_downstream(cfg)
+        return
     global RANK, WORLD_SIZE
     ddp_setup(RANK, WORLD_SIZE, cfg.port)
     from train_prise import Workspace as W
     root_dir = Path.cwd()
     workspace = W(cfg, RANK, WORLD_SIZE)
     root_dir = Path.cwd()
-    snapshot = root_dir / 'snapshot.pt'
+    snapshot = root_dir / f'{cfg.checkpoint_name}.pt'
     if cfg.load_snapshot:
         if snapshot.exists():
             print(f'resuming: {snapshot}')
             workspace.load_snapshot()
+        elif cfg.stage == 2:
+            raise Exception("No snapshot")
+    elif cfg.stage == 2:
+        raise Exception("No snapshot")
     if cfg.stage == 1:
         workspace.pretrain_models()
     elif cfg.stage == 2:
         workspace.train_bpe()
-    elif cfg.stage == 3:
-        workspace.downstream_adapt()
     else:
         raise ValueError(f"Invalid stage: {cfg.stage}")
+    destroy_process_group()
+
+
+def main_downstream(cfg):
+    global RANK, WORLD_SIZE
+    wandb.init(
+        project="parameterized-skill-mw-small", config=cfg, dir="../scratch/wandb",
+        name=cfg.downstream_exp_name, entity="parameterized-skills-2")
+    from train_prise import Workspace as W
+    root_dir = Path.cwd()
+    performances = []
+    ddp_setup(RANK, WORLD_SIZE, cfg.port)
+    # calculated for fair comparison with paramskills based on average per task trajectory length
+    #batch_sizes = [25, 30, 25, 24, 21, 18, 28, 30, 18, 21]
+    # batch sizes for libero 10: [45, 40, 41, 38, 40, 29, 39, 41, 64, 47]
+    idx = 0
+    for task_id in range(45, 50):
+        cfg.downstream_task_name = TASK_IDX_TO_TASK_NAME[task_id]
+        #cfg.batch_size = batch_sizes[idx]
+        workspace = W(cfg, RANK, WORLD_SIZE)
+        root_dir = Path.cwd()
+        snapshot = root_dir / f'{cfg.checkpoint_name}.pt'
+        if cfg.load_snapshot:
+            if snapshot.exists() and cfg.stage > 1:
+                print(f'resuming: {snapshot}')
+                workspace.load_snapshot()
+            else:
+                raise Exception('no snapshot found')
+        else:
+            raise Exception('no snapshot found')
+
+        workspace.downstream_adapt()
+        performances.append([i / 100 for i in workspace.performance])
+        time.sleep(1)
+        idx += 1
+
+    averaged_success = []
+    for step in range(len(performances[0])):
+        count = 0
+        sum = 0
+        for row in range(len(performances)):
+            sum += performances[row][step]
+            count += 1
+        averaged_success.append(sum / count)
+    step = cfg.eval_freq
+    wandb.define_metric("STEP", hidden=True)
+    wandb.define_metric("averaged_success", step_metric="STEP")
+    for i in range(len(averaged_success)):
+        wandb.log({"averaged_success":averaged_success[i], "STEP": step * (i + 1)})
     destroy_process_group()
 
 def wrapper(rank, world_size, cfg):
@@ -428,7 +508,7 @@ def wrapper(rank, world_size, cfg):
     main(cfg)
 
 def main_mp_launch_helper(cfg=None):
-    world_size = torch.cuda.device_count()
+    world_size = 1 #torch.cuda.device_count()
     if world_size==1:  # single GPU
         wrapper(0, 1, cfg)  # don't use multiprocessing
     else:

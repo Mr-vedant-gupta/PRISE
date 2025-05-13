@@ -13,9 +13,13 @@ from torch import distributions as pyd
 from torch.distributions.utils import _standard_normal
 import io
 from collections import defaultdict, deque
+from mw_tasks import TASK_IDX_TO_TASK_NAME
 
-def mw45_task_names():
-    return ['pick-out-of-hole', 'shelf-place', 'peg-unplug-side', 'drawer-open', 'pick-place', 'button-press-wall', 'assembly', 'door-open', 'button-press-topdown', 'button-press-topdown-wall', 'button-press', 'coffee-button', 'coffee-pull', 'coffee-push', 'dial-turn', 'door-close', 'drawer-close', 'faucet-open', 'faucet-close', 'hammer', 'handle-press-side', 'handle-press', 'handle-pull-side', 'handle-pull', 'lever-pull', 'peg-insert-side', 'reach', 'push-back', 'push', 'plate-slide', 'plate-slide-side', 'plate-slide-back', 'plate-slide-back-side', 'stick-push', 'push-wall', 'reach-wall','sweep-into', 'sweep', 'window-open', 'window-close', 'door-unlock', 'door-lock', 'bin-picking', 'basketball', 'soccer']
+# def mw45_task_names():
+#     return ['pick-out-of-hole', 'shelf-place', 'peg-unplug-side', 'drawer-open', 'pick-place', 'button-press-wall', 'assembly', 'door-open', 'button-press-topdown', 'button-press-topdown-wall', 'button-press', 'coffee-button', 'coffee-pull', 'coffee-push', 'dial-turn', 'door-close', 'drawer-close', 'faucet-open', 'faucet-close', 'hammer', 'handle-press-side', 'handle-press', 'handle-pull-side', 'handle-pull', 'lever-pull', 'peg-insert-side', 'reach', 'push-back', 'push', 'plate-slide', 'plate-slide-side', 'plate-slide-back', 'plate-slide-back-side', 'stick-push', 'push-wall', 'reach-wall','sweep-into', 'sweep', 'window-open', 'window-close', 'door-unlock', 'door-lock', 'bin-picking', 'basketball', 'soccer']
+def mw10_task_names():
+    return [TASK_IDX_TO_TASK_NAME[idx] for idx in range(10)]
+
 
 def generate_causal_mask(time_step, num_modalities):
     """
@@ -328,14 +332,34 @@ def schedule(schdl, step):
 #         _, _, _, _, min_encoding_indices = self.agent.TACO.quantizer(action_en)
 #         return min_encoding_indices
         
-    
+
+def create_stacked_images(imgs):
+        T, C, H, W = imgs.shape
+        history_length = 3
+        stacked_imgs = np.zeros((T, C * history_length, H, W), dtype=imgs.dtype)
+        # For each frame in the history
+        for h in range(history_length):
+            # Calculate the offset (0 for current frame, increasing for previous frames)
+            offset = history_length - 1 - h
+
+            # Handle the shifted indices:
+            # - For frames that would be before the start, use frame 0
+            # - For all other frames, use the appropriate previous frame
+            indices = np.maximum(0, np.arange(T) - offset)
+
+            # Place in the corresponding channel position
+            stacked_imgs[:, h * C:(h + 1) * C, :, :] = imgs[indices]
+
+        return stacked_imgs
+
 def compute_traj_latent_embedding(episode, device, nstep_history):
     with torch.no_grad():
-        obs = episode['observation'][:-1]
-        state     = episode['state'][:-1]
+        obs = episode['imgs'][:-2]
+        obs = create_stacked_images(obs)
+        state     = episode['states'][:-2]
         if state.shape[-1] == 39:
             state = np.hstack((state[:, :4], state[:, 18 : 18 + 4]))
-        action    = episode['action'][1:]
+        action    = episode['actions'][1:]
         obs, state, action = to_torch((obs, state, action), device=device)
 
 
@@ -359,6 +383,42 @@ def compute_traj_latent_embedding(episode, device, nstep_history):
             obs_episode.append(obs_history.unsqueeze(0))
             state_episode.append(state_history.unsqueeze(0))
 
+
+        obs_episode = torch.concatenate(obs_episode, dim=0)
+        state_episode = torch.concatenate(state_episode, dim=0)
+        obs_history = (obs_episode,
+                       state_episode)
+    return obs_history
+
+
+def compute_traj_latent_embedding_downstream(episode, device, nstep_history):
+    with torch.no_grad():
+        obs = episode['imgs'][:-1]
+        state = episode['states'][:-1]
+        if state.shape[-1] == 39:
+            state = np.hstack((state[:, :4], state[:, 18: 18 + 4]))
+        action = episode['actions'][1:]
+        obs, state, action = to_torch((obs, state, action), device=device)
+
+        obs_buffer = deque(maxlen=nstep_history)
+        state_buffer = deque(maxlen=nstep_history)
+        obs_episode, state_episode = [], []
+
+        for t in range(obs.shape[0]):
+            ### corner case (prefill the queue in the initial timestep)
+            if len(obs_buffer) == 0:
+                for i in range(nstep_history):
+                    obs_buffer.append(obs[0].unsqueeze(0))  ### (1,3,128,128)
+                    state_buffer.append(state[0].float().unsqueeze(0))  ### (1, state_dim)
+            else:
+                obs_buffer.append(obs[t].unsqueeze(0))  ### (1,3,128,128)
+                state_buffer.append(state[t].float().unsqueeze(0))  ### (1,state_dim)
+
+            obs_history = torch.concatenate(list(obs_buffer), dim=0)  ### (10,3,128,128)
+            state_history = torch.concatenate(list(state_buffer), dim=0)  ### (10,state_dim)
+
+            obs_episode.append(obs_history.unsqueeze(0))
+            state_episode.append(state_history.unsqueeze(0))
 
         obs_episode = torch.concatenate(obs_episode, dim=0)
         state_episode = torch.concatenate(state_episode, dim=0)

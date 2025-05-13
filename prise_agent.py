@@ -254,6 +254,7 @@ class PRISEAgent:
         next_obs    = utils.to_torch(next_obs, device=self.device)
         action = torch.torch.as_tensor(action, device=self.device).float()
         action_seq = utils.to_torch(action_seq, device=self.device)
+
         
         ### (batch_size, num_step_history, 3, 128, 128)
         img_history, state_history = obs_history
@@ -355,7 +356,7 @@ class PRISEAgent:
                                          ], aug=False)
                 z_seq.append(self.compute_transformer_embedding(z)) ###(batch_size, feature_dim)
         
-        meta_action = self.TACO.module.token_policy(z_seq[0])
+        meta_action = self.PRISE.module.token_policy(z_seq[0])
         token_policy_loss = F.cross_entropy(meta_action, index)
         
         ###################### Finetune Action Decoder ###########################
@@ -374,7 +375,7 @@ class PRISEAgent:
                 for idx in range(vocab_size):
                     u_quantized_seq = []
                     for t in range(nstep):
-                        learned_code   = self.TACO.module.a_quantizer.embedding.weight
+                        learned_code   = self.PRISE.module.a_quantizer.embedding.weight
                         if t<rollout_length[idx]:
                             u_quantized    = learned_code[tok_to_code(torch.tensor(idx_to_tok[idx]))[t], :]
                         else:
@@ -386,12 +387,12 @@ class PRISEAgent:
                 u_quantized_lst = torch.concatenate(u_quantized_lst,dim=1) ### (batch_size, vocab_size, nstep, feature_dim)
 
             ### Decode the codes into action sequences and calculate L1 loss ### (batch_size*nstep*feature_dim, -1)
-            decode_action = self.TACO.module.decoder((z + u_quantized_lst).reshape(-1, z.shape[-1]))
+            decode_action = self.PRISE.module.decoder((z + u_quantized_lst).reshape(-1, z.shape[-1]))
             action = action.reshape(-1, action_dim)
             if self.decoder_type == 'deterministic':
                 decoder_loss = torch.sum(torch.abs(decode_action-action), dim=-1, keepdim=True)
             elif self.decoder_type == 'gmm':
-                decoder_loss = self.TACO.module.decoder.loss_fn(decode_action, action, reduction='none')
+                decoder_loss = self.PRISE.module.decoder.loss_fn(decode_action, action, reduction='none')
             else:
                 print('Decoder type not supported')
                 raise Exception
@@ -408,9 +409,9 @@ class PRISEAgent:
         else:
             decoder_loss = torch.tensor(0.)
         
-        self.taco_opt.zero_grad()
+        self.prise_opt.zero_grad()
         (token_policy_loss+self.alpha*decoder_loss).backward()
-        self.taco_opt.step()
+        self.prise_opt.step()
         
         metrics = dict()
         metrics['token_policy_loss'] = token_policy_loss.item()

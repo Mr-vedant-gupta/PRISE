@@ -58,16 +58,42 @@ class ReplayBuffer(IterableDataset):
     def __len__(self):
         return self._size
 
+    def create_stacked_images(self, imgs):
+        T, C, H, W = imgs.shape
+        history_length = 3
+        stacked_imgs = np.zeros((T, C * history_length, H, W), dtype=imgs.dtype)
+        # For each frame in the history
+        for h in range(history_length):
+            # Calculate the offset (0 for current frame, increasing for previous frames)
+            offset = history_length - 1 - h
+
+            # Handle the shifted indices:
+            # - For frames that would be before the start, use frame 0
+            # - For all other frames, use the appropriate previous frame
+            indices = np.maximum(0, np.arange(T) - offset)
+
+            # Place in the corresponding channel position
+            stacked_imgs[:, h * C:(h + 1) * C, :, :] = imgs[indices]
+
+        return stacked_imgs
+
     def _store_episode(self, eps_fn):
         episode = load_episode(eps_fn)
-        state = episode['state']
+        state = episode['states']
         if state.shape[-1] > 8:
-            episode['state'] = np.hstack((state[:, :4], state[:, 18 : 18 + 4]))
+            episode['states'] = np.hstack((state[:, :4], state[:, 18 : 18 + 4]))
+
+        # Do the image stacking and remove the extra element
+        episode['imgs'] = self.create_stacked_images(episode['imgs'])[:-1]
+        episode['states'] = episode['states'][:-1]
+
+
         eps_len = episode_len(episode)
         while eps_len + self._size > self._max_size:
-            early_eps_fn = self._episode_fns.pop(0)
-            early_eps = self._episodes.pop(early_eps_fn)
-            self._size -= episode_len(early_eps)
+            raise Exception("this should not happen")
+            # early_eps_fn = self._episode_fns.pop(0)
+            # early_eps = self._episodes.pop(early_eps_fn)
+            # self._size -= episode_len(early_eps)
         self._episode_fns.append(eps_fn)
         self._episode_fns.sort()
         self._episodes[eps_fn] = episode
@@ -91,16 +117,19 @@ class ReplayBuffer(IterableDataset):
     def _sample(self):
         self._samples_since_last_fetch += 1
         episode = self._sample_episode()
-        
         # add +1 for the first dummy transition
         idx = np.random.randint(0, episode_len(episode) - self._nstep + 1) + 1
-        action     = episode['action'][idx]
-        action_seq = [episode['action'][idx+i] for i in range(self._nstep)]
+        # print(f"idx: {idx}")
+        # print(f"episode len {episode_len(episode)}")
+        # print(f"action shape {episode['actions'].shape}")
+        # print(f"obs shape {episode['imgs'].shape}")
+        action     = episode['actions'][idx]
+        action_seq = [episode['actions'][idx+i] for i in range(self._nstep)]
         
         next_obs, next_state = [], []
         for i in range(self._nstep):
-            next_obs.append(episode['observation'][idx + i][None,:])
-            next_state.append(episode['state'][idx + i][None,:])
+            next_obs.append(episode['imgs'][idx + i][None,:])
+            next_state.append(episode['states'][idx + i][None,:])
             
         next_obs = np.vstack(next_obs)
         next_state = np.vstack(next_state)         
@@ -110,13 +139,13 @@ class ReplayBuffer(IterableDataset):
         timestep = idx - 1
         ### (o_{t-3}, o_{t-2}, o_{t-1}, o_{t}, 0, 0 ...)
         while timestep >= 0 and len(obs_history)<self._nstep_history:
-            obs_history = [episode['observation'][timestep][None,:]] + obs_history
-            state_history     = [episode['state'][timestep][None, :]] + state_history 
+            obs_history = [episode['imgs'][timestep][None,:]] + obs_history
+            state_history     = [episode['states'][timestep][None, :]] + state_history
             timestep -= 1
         
         pad_step = self._nstep_history - len(obs_history)
-        obs_history = [episode['observation'][0][None,:] for i in range(pad_step)] + obs_history
-        state_history     = [episode['state'][0][None, :] for i in range(pad_step)] + state_history 
+        obs_history = [episode['imgs'][0][None,:] for i in range(pad_step)] + obs_history
+        state_history     = [episode['states'][0][None, :] for i in range(pad_step)] + state_history
         
         obs_history = np.vstack(obs_history)
         state_history = np.vstack(state_history)                   
