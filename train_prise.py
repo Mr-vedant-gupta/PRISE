@@ -352,7 +352,7 @@ class Workspace:
         task = f"task {task_id}"
         decoder_loss = f"{task} decoder_loss"
         skill_token_policy_loss = f"{task} skill_token_policy_loss"
-        success = f"Task {cfg.downstream_task_index} test success"
+        success = f"Task {self.cfg.downstream_task_index} test success"
         wandb.define_metric(task, hidden=True)
         wandb.define_metric(decoder_loss, step_metric=task)
         wandb.define_metric(skill_token_policy_loss, step_metric=task)
