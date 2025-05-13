@@ -352,7 +352,7 @@ class Workspace:
         task = f"task {task_id}"
         decoder_loss = f"{task} decoder_loss"
         skill_token_policy_loss = f"{task} skill_token_policy_loss"
-        success = f"{task} success"
+        success = f"Task {cfg.downstream_task_index} test success"
         wandb.define_metric(task, hidden=True)
         wandb.define_metric(decoder_loss, step_metric=task)
         wandb.define_metric(skill_token_policy_loss, step_metric=task)
@@ -360,7 +360,7 @@ class Workspace:
 
 
         while self.global_step < self.cfg.num_train_steps:
-            self.global_step += 1
+            self._global_step += 1
             if self.global_step%self.cfg.eval_freq == 0 and self.rank == 0:
                 print(f"\nTraining for {self.global_step} steps of {self.cfg.batch_size}-sized batches has takes {time.time() - start_train_block_time}s (including eval time).")
                 if metrics is not None:
@@ -382,8 +382,7 @@ class Workspace:
                 success_rate = self.evaluate()
                 print(f"Evaluation on {self.cfg.num_eval_episodes} episodes took {time.time() - start_eval_block_time}s.")
                 wandb.log({success: success_rate, task: self.global_step})
-            
-            self._global_step += 1
+
             
     def save_snapshot(self, stage, ckpt=None):
         self.results_dir.mkdir(parents=True, exist_ok=True)
@@ -435,7 +434,7 @@ def main(cfg):
     workspace = W(cfg, RANK, WORLD_SIZE)
     root_dir = Path.cwd()
     snapshot = root_dir / f'{cfg.checkpoint_name}.pt'
-    if cfg.load_snapshot:
+    if cfg.load_snapshot and cfg.stage != 1:
         if snapshot.exists():
             print(f'resuming: {snapshot}')
             workspace.load_snapshot()
@@ -462,10 +461,18 @@ def main_downstream(cfg):
     performances = []
     ddp_setup(RANK, WORLD_SIZE, cfg.port)
     # calculated for fair comparison with paramskills based on average per task trajectory length
-    #batch_sizes = [25, 30, 25, 24, 21, 18, 28, 30, 18, 21]
-    # batch sizes for libero 10: [45, 40, 41, 38, 40, 29, 39, 41, 64, 47]
     idx = 0
-    for task_id in range(45, 50):
+
+    if cfg.downstream_dataset_name == "default":
+        downstream_tasks = list(range(45, 50))
+    elif cfg.downstream_dataset_name == "custom":
+        downstream_tasks = [10, 23, 24, 27, 37]
+    else:
+        raise Exception("need to choose a valid downstream dataset name")
+
+
+    for task_id in downstream_tasks:
+        cfg.downstream_task_index = task_id
         cfg.downstream_task_name = TASK_IDX_TO_TASK_NAME[task_id]
         #cfg.batch_size = batch_sizes[idx]
         workspace = W(cfg, RANK, WORLD_SIZE)

@@ -60,6 +60,7 @@ action_dim: 4
 img_res: [84,84]
 decoder_type: deterministic
 decoder_loss_coef: 0.01
+downstream_dataset_name: dummy
 
 agent:
   _target_: ${target}
