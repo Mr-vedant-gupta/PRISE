@@ -479,10 +479,20 @@ def main_downstream(cfg):
     performances = []
     ddp_setup(RANK, WORLD_SIZE, cfg.port)
     # calculated for fair comparison with paramskills based on average per task trajectory length
-    batch_sizes = [25, 30, 25, 24, 21, 18, 28, 30, 18, 21]
-    # batch sizes for libero 10: [45, 40, 41, 38, 40, 29, 39, 41, 64, 47]
+    if cfg.downstream_task_suite == "libero_90":
+        batch_sizes = [25, 30, 25, 24, 21, 18, 28, 30, 18, 21]
+        task_list = list(range(80, 90))
+    elif cfg.downstream_task_suite == "libero_10":
+        batch_sizes = [45, 40, 41, 38, 40, 29, 39, 41, 64, 47]
+        task_list = list(range(10))
+    else:
+        raise Exception("this should not happen")
     idx = 0
-    for task_id in range(80, 90):
+    if "lib10" in cfg.downstream_exp_name:
+        assert task_list == list(range(10))
+    else:
+        assert task_list == list(range(80, 90))
+    for task_id in task_list:
         cfg.downstream_task_name = task_id
         # if cfg.batch_size != 0:
         #     raise Exception("this should not happen")
